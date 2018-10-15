@@ -2,15 +2,38 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"image"
-	_ "image/jpeg"
+	"image/color"
+	"image/draw"
+	"image/jpeg"
 	_ "image/png"
 	"log"
+	"math/rand"
 	"reflect"
+	"sort"
+	"sync"
 	"syscall/js"
 	"unsafe"
 )
+
+type sortRow struct {
+	start int
+	end   int
+}
+
+type YSorter []color.RGBA
+
+func (r YSorter) Len() int      { return len(r) }
+func (r YSorter) Swap(i, j int) { r[i], r[j] = r[j], r[i] }
+func (r YSorter) Less(i, j int) bool {
+	rgba1 := r[i]
+	rgba2 := r[j]
+
+	y1, _, _ := color.RGBToYCbCr(rgba1.R, rgba1.G, rgba1.B)
+	y2, _, _ := color.RGBToYCbCr(rgba2.R, rgba2.G, rgba2.B)
+
+	return y1 < y2
+}
 
 var buf []uint8
 
@@ -25,39 +48,88 @@ func initMem(i []js.Value) {
 }
 
 func processImage([]js.Value) {
-	log.Println(buf[:3])
-	log.Println(buf[len(buf)-3:])
 	r := bytes.NewReader(buf)
-	m, _, err := image.Decode(r)
+	src, _, err := image.Decode(r)
 
 	if err != nil {
 		log.Fatal(err)
 	}
-	bounds := m.Bounds()
 
-	// Calculate a 16-bin histogram for m's red, green, blue and alpha components.
-	//
-	// An image's bounds do not necessarily start at (0, 0), so the two loops start
-	// at bounds.Min.Y and bounds.Min.X. Looping over Y first and X second is more
-	// likely to result in better memory access patterns than X first and Y second.
-	var histogram [16][4]int
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			r, g, b, a := m.At(x, y).RGBA()
-			// A color's RGBA method returns values in the range [0, 65535].
-			// Shifting by 12 reduces this to the range [0, 15].
-			histogram[r>>12][0]++
-			histogram[g>>12][1]++
-			histogram[b>>12][2]++
-			histogram[a>>12][3]++
+	b := src.Bounds()
+	rgba := image.NewRGBA(b)
+	draw.Draw(rgba, b, src, b.Min, draw.Src)
+
+	var pixels [][]color.RGBA
+	for y := 0; y < b.Max.Y; y++ {
+		var row []color.RGBA
+		for x := 0; x < b.Max.X*4; x += 4 {
+			index := y * b.Max.X * 4
+			row = append(row, color.RGBA{rgba.Pix[index+x], rgba.Pix[index+x+1], rgba.Pix[index+x+2], rgba.Pix[index+x+3]})
 		}
+		pixels = append(pixels, row)
 	}
 
-	// Print the results.
-	fmt.Printf("%-14s %6s %6s %6s %6s\n", "bin", "red", "green", "blue", "alpha")
-	for i, x := range histogram {
-		fmt.Printf("0x%04x-0x%04x: %6d %6d %6d %6d\n", i<<12, (i+1)<<12-1, x[0], x[1], x[2], x[3])
+	maskRows := getMaskRows(b)
+
+	doSort(rgba, pixels, maskRows)
+
+	w := new(bytes.Buffer)
+
+	jpeg.Encode(w, rgba, &jpeg.Options{100})
+	out := w.Bytes()
+
+	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&out))
+	ptr := uintptr(unsafe.Pointer(hdr.Data))
+
+	js.Global().Call("imageProcessed", ptr, len(out))
+}
+
+func getMaskRows(bounds image.Rectangle) [][]sortRow {
+	width, height := bounds.Max.X, bounds.Max.Y
+
+	var maskRows [][]sortRow
+	for y := 0; y < height; y++ {
+		var rows []sortRow
+		var start int
+		var inRow bool
+
+		doRandom := true
+
+		for x := 0; x < width; x++ {
+			if !inRow {
+				start = x
+				inRow = true
+			} else {
+				if doRandom && rand.Float64() > .9 {
+					rows = append(rows, sortRow{start, x})
+					inRow = false
+				}
+			}
+		}
+		maskRows = append(maskRows, rows)
 	}
+
+	return maskRows
+}
+
+func doSort(baseImage *image.RGBA, basePixels [][]color.RGBA, maskRows [][]sortRow) {
+	var wg sync.WaitGroup
+	for y := range maskRows {
+		wg.Add(1)
+		go func(y int) {
+			defer wg.Done()
+			for i := range maskRows[y] {
+				row := maskRows[y][i]
+
+				sort.Sort(YSorter(basePixels[y][row.start:row.end]))
+
+				for x := row.start; x < row.end; x++ {
+					baseImage.Set(x, y, basePixels[y][x])
+				}
+			}
+		}(y)
+	}
+	wg.Wait()
 }
 
 func registerCallbacks() {
