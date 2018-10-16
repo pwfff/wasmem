@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"image"
-	"image/color"
 	"image/draw"
 	"image/jpeg"
 	_ "image/png"
@@ -21,18 +20,28 @@ type sortRow struct {
 	end   int
 }
 
-type YSorter []color.RGBA
+type YSorter []uint8
 
-func (r YSorter) Len() int      { return len(r) }
-func (r YSorter) Swap(i, j int) { r[i], r[j] = r[j], r[i] }
+func (r YSorter) Len() int { return len(r) / 4 }
+func (r YSorter) Swap(i, j int) {
+	i = i * 4
+	j = j * 4
+	for o := 0; o < 4; o++ {
+		r[i+o], r[j+o] = r[j+o], r[i+o]
+	}
+}
 func (r YSorter) Less(i, j int) bool {
-	rgba1 := r[i]
-	rgba2 := r[j]
+	i = i * 4
+	j = j * 4
 
-	y1, _, _ := color.RGBToYCbCr(rgba1.R, rgba1.G, rgba1.B)
-	y2, _, _ := color.RGBToYCbCr(rgba2.R, rgba2.G, rgba2.B)
+	y1 := getY(r[i], r[i+1], r[i+2])
+	y2 := getY(r[j], r[j+1], r[j+2])
 
 	return y1 < y2
+}
+
+func getY(r, g, b uint8) uint8 {
+	return (r + r + r + b + g + g + g + g) >> 3
 }
 
 var buf []uint8
@@ -59,19 +68,9 @@ func processImage([]js.Value) {
 	rgba := image.NewRGBA(b)
 	draw.Draw(rgba, b, src, b.Min, draw.Src)
 
-	var pixels [][]color.RGBA
-	for y := 0; y < b.Max.Y; y++ {
-		var row []color.RGBA
-		for x := 0; x < b.Max.X*4; x += 4 {
-			index := y * b.Max.X * 4
-			row = append(row, color.RGBA{rgba.Pix[index+x], rgba.Pix[index+x+1], rgba.Pix[index+x+2], rgba.Pix[index+x+3]})
-		}
-		pixels = append(pixels, row)
-	}
-
 	maskRows := getMaskRows(b)
 
-	doSort(rgba, pixels, maskRows)
+	doSort(rgba, maskRows)
 
 	w := new(bytes.Buffer)
 
@@ -112,7 +111,7 @@ func getMaskRows(bounds image.Rectangle) [][]sortRow {
 	return maskRows
 }
 
-func doSort(baseImage *image.RGBA, basePixels [][]color.RGBA, maskRows [][]sortRow) {
+func doSort(baseImage *image.RGBA, maskRows [][]sortRow) {
 	var wg sync.WaitGroup
 	for y := range maskRows {
 		wg.Add(1)
@@ -121,11 +120,10 @@ func doSort(baseImage *image.RGBA, basePixels [][]color.RGBA, maskRows [][]sortR
 			for i := range maskRows[y] {
 				row := maskRows[y][i]
 
-				sort.Sort(YSorter(basePixels[y][row.start:row.end]))
-
-				for x := row.start; x < row.end; x++ {
-					baseImage.Set(x, y, basePixels[y][x])
-				}
+				// (x, y) starts at Pix[(y-Rect.Min.Y)*Stride + (x-Rect.Min.X)*4].
+				start := (y-baseImage.Rect.Min.Y)*baseImage.Stride + (row.start-baseImage.Rect.Min.X)*4
+				end := start + (row.end-row.start)*4
+				sort.Sort(YSorter(baseImage.Pix[start:end]))
 			}
 		}(y)
 	}
