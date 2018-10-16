@@ -41,7 +41,7 @@ func (r YSorter) Less(i, j int) bool {
 }
 
 func getY(r, g, b uint8) uint8 {
-	return (r + r + r + b + g + g + g + g) >> 3
+	return uint8(0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b))
 }
 
 var buf []uint8
