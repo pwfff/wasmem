@@ -4,8 +4,7 @@
         <script src="wasm_exec.js"></script>
         <script>
             const go = new Go();
-            const wasmMemory = new WebAssembly.Memory({initial: 512});
-            let memoryBytes = new Uint8Array(wasmMemory.buffer)
+            let memoryBytes;
             let mod, inst, bytes;
 
             function gotMem(pointer) {
