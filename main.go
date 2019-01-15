@@ -46,17 +46,15 @@ func getY(r, g, b uint8) uint8 {
 
 var buf []uint8
 
-func initMem(i []js.Value) {
-	length := i[0].Int()
+func initMem(this js.Value, args []js.Value) interface{} {
+	length := args[0].Int()
 	buf = make([]uint8, length)
 	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&buf))
 	ptr := uintptr(unsafe.Pointer(hdr.Data))
-	log.Println(ptr)
-	//js.Global().Set("pointer", ptr)
-	js.Global().Call("gotMem", ptr)
+	return int(ptr)
 }
 
-func processImage([]js.Value) {
+func processImage(this js.Value, args []js.Value) interface{} {
 	r := bytes.NewReader(buf)
 	src, _, err := image.Decode(r)
 
@@ -80,7 +78,7 @@ func processImage([]js.Value) {
 	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&out))
 	ptr := uintptr(unsafe.Pointer(hdr.Data))
 
-	js.Global().Call("imageProcessed", ptr, len(out))
+	return []interface{}{int(ptr), len(out)}
 }
 
 func getMaskRows(bounds image.Rectangle) [][]sortRow {
@@ -131,8 +129,8 @@ func doSort(baseImage *image.RGBA, maskRows [][]sortRow) {
 }
 
 func registerCallbacks() {
-	js.Global().Set("initMem", js.NewCallback(initMem))
-	js.Global().Set("processImage", js.NewCallback(processImage))
+	js.Global().Set("initMem", js.FuncOf(initMem))
+	js.Global().Set("processImage", js.FuncOf(processImage))
 }
 
 func main() {
