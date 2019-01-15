@@ -4,27 +4,26 @@
         <script src="wasm_exec.js"></script>
         <script>
             const go = new Go();
-            let memoryBytes;
-            let mod, inst, bytes;
-
-            function gotMem(pointer) {
-                memoryBytes.set(bytes, pointer);
-                processImage();
-            }
-
-            function imageProcessed(pointer, length) {
-                let resultBytes = memoryBytes.slice(pointer, pointer + length);
-                let blob = new Blob([resultBytes], {'type': 'image/jpeg'});
-                document.getElementById('out').src = URL.createObjectURL(blob);
-            }
+            let mod, inst;
 
             let openFile = function(event) {
                 var input = event.target;
 
                 var reader = new FileReader();
                 reader.onload = function(){
-                    bytes = new Uint8Array(reader.result);
-                    initMem(bytes.length);
+                    let bytes = new Uint8Array(reader.result);
+                    let pointer = initMem(bytes.length);
+
+                    let memoryBytes = new Uint8Array(inst.exports.mem.buffer);
+                    memoryBytes.set(bytes, pointer);
+
+                    let result = processImage();
+                    // arena could have moved
+                    memoryBytes = new Uint8Array(inst.exports.mem.buffer);
+
+                    let resultBytes = memoryBytes.slice(result[0], result[0] + result[1]);
+                    let blob = new Blob([resultBytes], {'type': 'image/jpeg'});
+                    document.getElementById('out').src = URL.createObjectURL(blob);
                 };
                 reader.readAsArrayBuffer(input.files[0]);
             };
@@ -35,8 +34,7 @@
             ).then(async (result) => {
                 mod = result.module;
                 inst = result.instance;
-                memoryBytes = new Uint8Array(inst.exports.mem.buffer)
-                await go.run(inst)
+                go.run(inst)
             });
         </script>
     </head>
