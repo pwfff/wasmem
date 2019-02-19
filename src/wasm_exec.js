@@ -12,66 +12,39 @@
 	} else {
 		throw new Error("cannot export Go (neither global, window nor self is defined)");
 	}
-
-	// Map web browser API and Node.js API to a single common API (preferring web standards over Node.js API).
-	//const isNodeJS = global.process && global.process.title === "node";
-	const isNodeJS = false;
-	if (isNodeJS) {
-		global.require = require;
-		global.fs = require("fs");
-
-		const nodeCrypto = require("crypto");
-		global.crypto = {
-			getRandomValues(b) {
-				nodeCrypto.randomFillSync(b);
-			},
-		};
-
-		global.performance = {
-			now() {
-				const [sec, nsec] = process.hrtime();
-				return sec * 1000 + nsec / 1000000;
-			},
-		};
-
-		const util = require("util");
-		global.TextEncoder = util.TextEncoder;
-		global.TextDecoder = util.TextDecoder;
-	} else {
-		let outputBuf = "";
-		global.fs = {
-			constants: { O_WRONLY: -1, O_RDWR: -1, O_CREAT: -1, O_TRUNC: -1, O_APPEND: -1, O_EXCL: -1 }, // unused
-			writeSync(fd, buf) {
-				outputBuf += decoder.decode(buf);
-				const nl = outputBuf.lastIndexOf("\n");
-				if (nl != -1) {
-					console.log(outputBuf.substr(0, nl));
-					outputBuf = outputBuf.substr(nl + 1);
-				}
-				return buf.length;
-			},
-			write(fd, buf, offset, length, position, callback) {
-				if (offset !== 0 || length !== buf.length || position !== null) {
-					throw new Error("not implemented");
-				}
-				const n = this.writeSync(fd, buf);
-				callback(null, n);
-			},
-			open(path, flags, mode, callback) {
-				const err = new Error("not implemented");
-				err.code = "ENOSYS";
-				callback(err);
-			},
-			read(fd, buffer, offset, length, position, callback) {
-				const err = new Error("not implemented");
-				err.code = "ENOSYS";
-				callback(err);
-			},
-			fsync(fd, callback) {
-				callback(null);
-			},
-		};
-	}
+        let outputBuf = "";
+        global.fs = {
+                constants: { O_WRONLY: -1, O_RDWR: -1, O_CREAT: -1, O_TRUNC: -1, O_APPEND: -1, O_EXCL: -1 }, // unused
+                writeSync(fd, buf) {
+                        outputBuf += decoder.decode(buf);
+                        const nl = outputBuf.lastIndexOf("\n");
+                        if (nl != -1) {
+                                console.log(outputBuf.substr(0, nl));
+                                outputBuf = outputBuf.substr(nl + 1);
+                        }
+                        return buf.length;
+                },
+                write(fd, buf, offset, length, position, callback) {
+                        if (offset !== 0 || length !== buf.length || position !== null) {
+                                throw new Error("not implemented");
+                        }
+                        const n = this.writeSync(fd, buf);
+                        callback(null, n);
+                },
+                open(path, flags, mode, callback) {
+                        const err = new Error("not implemented");
+                        err.code = "ENOSYS";
+                        callback(err);
+                },
+                read(fd, buffer, offset, length, position, callback) {
+                        const err = new Error("not implemented");
+                        err.code = "ENOSYS";
+                        callback(err);
+                },
+                fsync(fd, callback) {
+                        callback(null);
+                },
+        };
 
 	const encoder = new TextEncoder("utf-8");
 	const decoder = new TextDecoder("utf-8");
@@ -79,7 +52,10 @@
 	global.Go = class {
 		constructor() {
 			this.argv = ["js"];
-			this.env = {};
+			this.env = {
+                            GODEBUG: "gcstoptheworld=1",
+                            GOGC: "20",
+                        };
 			this.exit = (code) => {
 				if (code !== 0) {
 					console.warn("exit code:", code);
@@ -442,29 +418,27 @@
 		}
 	}
 
-	if (isNodeJS) {
-		if (process.argv.length < 3) {
-			process.stderr.write("usage: go_js_wasm_exec [wasm binary] [arguments]\n");
-			process.exit(1);
-		}
+        if (process.argv.length < 3) {
+                process.stderr.write("usage: go_js_wasm_exec [wasm binary] [arguments]\n");
+                process.exit(1);
+        }
 
-		const go = new Go();
-		go.argv = process.argv.slice(2);
-		go.env = Object.assign({ TMPDIR: require("os").tmpdir() }, process.env);
-		go.exit = process.exit;
-		WebAssembly.instantiate(fs.readFileSync(process.argv[2]), go.importObject).then((result) => {
-			process.on("exit", (code) => { // Node.js exits if no event handler is pending
-                                console.log('wasm memory size', result.instance.exports.mem.buffer.byteLength);
-				if (code === 0 && !go.exited) {
-					// deadlock, make Go print error and stack traces
-					go._pendingEvent = { id: 0 };
-					go._resume();
-				}
-			});
-                        global.goInst = result.instance;
-			return go.run(result.instance);
-		}).catch((err) => {
-			throw err;
-		});
-	}
+        const go = new Go();
+        go.argv = process.argv.slice(2);
+        go.env = Object.assign({ TMPDIR: require("os").tmpdir() }, process.env);
+        go.exit = process.exit;
+        WebAssembly.instantiate(fs.readFileSync(process.argv[2]), go.importObject).then((result) => {
+                process.on("exit", (code) => { // Node.js exits if no event handler is pending
+                        console.log('wasm memory size', result.instance.exports.mem.buffer.byteLength);
+                        if (code === 0 && !go.exited) {
+                                // deadlock, make Go print error and stack traces
+                                go._pendingEvent = { id: 0 };
+                                go._resume();
+                        }
+                });
+                global.goInst = result.instance;
+                return go.run(result.instance);
+        }).catch((err) => {
+                throw err;
+        });
 })();
